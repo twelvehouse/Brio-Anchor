@@ -76,7 +76,7 @@ public class PosingTransformWindow : Window
 
     private static void DrawButtons(PosingCapability posing)
     {
-        float buttonWidth = (ImGui.GetContentRegionAvail().X - (ImGui.GetStyle().ItemSpacing.X * 3f)) / 4f;
+        float buttonWidth = (ImGui.GetContentRegionAvail().X - (ImGui.GetStyle().ItemSpacing.X * 5f)) / 6f;
 
         // Mirror mode
         PosingEditorCommon.DrawMirrorModeSelect(posing, new Vector2(buttonWidth, 0));
@@ -84,6 +84,14 @@ public class PosingTransformWindow : Window
         // IK
         ImGui.SameLine();
         PosingEditorCommon.DrawIKSelect(posing, new Vector2(buttonWidth, 0));
+
+        // Follow
+        ImGui.SameLine();
+        PosingEditorCommon.DrawFollowSelect(posing, new Vector2(buttonWidth, 0));
+
+        // Anchors
+        ImGui.SameLine();
+        PosingEditorCommon.DrawAnchorsButton(posing, new Vector2(buttonWidth, 0));
 
         // Select Parent
         ImGui.SameLine();

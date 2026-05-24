@@ -1,6 +1,8 @@
 ﻿using Brio.Capabilities.Actor;
 using Brio.Core;
+using Brio.Entities;
 using Brio.Entities.Actor;
+using Brio.Entities.Core;
 using Brio.Files;
 using Brio.Game.Actor.Appearance;
 using Brio.Game.Actor.Extensions;
@@ -9,6 +11,7 @@ using Brio.Game.Posing.Skeletons;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 
 namespace Brio.Capabilities.Posing;
 
@@ -16,6 +19,8 @@ public class SkeletonPosingCapability : ActorCharacterCapability
 {
     private readonly SkeletonService _skeletonService;
     private readonly PosingService _posingService;
+    private readonly EntityManager _entityManager;
+    private readonly AnchorService _anchorService;
 
 
     public Skeleton? CharacterSkeleton { get; private set; }
@@ -37,10 +42,12 @@ public class SkeletonPosingCapability : ActorCharacterCapability
     private readonly List<Action<Bone, BonePoseInfo>> _transitiveActions = [];
 
 
-    public SkeletonPosingCapability(ActorEntity parent, SkeletonService skeletonService, PosingService posingService) : base(parent)
+    public SkeletonPosingCapability(ActorEntity parent, SkeletonService skeletonService, PosingService posingService, EntityManager entityManager, AnchorService anchorService) : base(parent)
     {
         _skeletonService = skeletonService;
         _posingService = posingService;
+        _entityManager = entityManager;
+        _anchorService = anchorService;
 
         _skeletonService.SkeletonUpdateStart += OnSkeletonUpdateStart;
         _skeletonService.SkeletonUpdateEnd += OnSkeletonUpdateEnd;
@@ -255,11 +262,103 @@ public class SkeletonPosingCapability : ActorCharacterCapability
     private void OnSkeletonUpdateStart()
     {
         UpdateCache();
+        RegisterFollowActions();
     }
 
     private void OnSkeletonUpdateEnd()
     {
         _transitiveActions.Clear();
+
+        // Strip transient stacks (e.g. Follow) from this frame so they don't accumulate.
+        foreach(var pose in PoseInfo.AllPoses)
+            pose.RemoveTransientStacks();
+    }
+
+    private void RegisterFollowActions()
+    {
+        foreach(var pose in PoseInfo.AllPoses)
+        {
+            var follow = pose.Follow;
+            if(follow is null || !follow.Enabled || !follow.HasValidAnchor)
+                continue;
+
+            var anchor = _anchorService.Get(follow.AnchorId);
+            if(anchor is null)
+                continue;
+
+            var followLocal = follow;
+            var poseLocal = pose;
+            var anchorLocal = anchor;
+            RegisterTransitiveAction((bone, bonePoseInfo) =>
+            {
+                if(bonePoseInfo != poseLocal)
+                    return;
+                ApplyFollowToBone(bone, bonePoseInfo, followLocal, anchorLocal);
+            });
+        }
+    }
+
+    private unsafe void ApplyFollowToBone(Bone bone, BonePoseInfo bonePoseInfo, BoneFollowInfo follow, PoseAnchor anchor)
+    {
+        if(bone.Skeleton.CharacterBase is null)
+            return;
+
+        if(!_anchorService.TryGetWorldTransform(anchor, out var anchorWorld))
+            return;
+
+        // Disallow self-anchoring (a bone pointing at an anchor rooted on itself).
+        if(_anchorService.TryGetSourceBone(anchor, out var sourceBone) && sourceBone == bone)
+            return;
+
+        // Convert anchor world pose into the follower's model space.
+        var dstActorWorld = GetActorWorldTransform(bone.Skeleton.CharacterBase);
+        var invDstRot = Quaternion.Conjugate(dstActorWorld.Rotation);
+        var dstActorScaleRcp = SafeRcp(dstActorWorld.Scale);
+
+        var targetModelPos = Vector3.Transform(anchorWorld.Position - dstActorWorld.Position, invDstRot) * dstActorScaleRcp;
+        var targetModelRot = invDstRot * anchorWorld.Rotation;
+
+        var current = bone.LastTransform;
+        var stackTransform = Transform.Identity;
+
+        if(follow.FollowPosition)
+            stackTransform.Position = targetModelPos - current.Position;
+
+        if(follow.FollowRotation)
+            stackTransform.Rotation = Quaternion.Normalize(Quaternion.Conjugate(current.Rotation) * targetModelRot);
+
+        if(follow.FollowScale)
+            stackTransform.Scale = anchorWorld.Scale - current.Scale;
+
+        if(stackTransform.IsPositionNaN() || stackTransform.IsRotationNaN() || stackTransform.IsScaleNaN())
+            return;
+
+        // Consume whatever IK the bone already has configured via the existing IK editor.
+        // No separate IK toggle on the follow side — one IK switch, one place to edit it.
+        var ik = bonePoseInfo.DefaultIK.Enabled && follow.FollowPosition
+            ? bonePoseInfo.DefaultIK
+            : BoneIKInfo.Disabled;
+
+        bonePoseInfo.AddTransientStack(new BonePoseTransformInfo(TransformComponents.None, ik, stackTransform));
+    }
+
+    private static unsafe Transform GetActorWorldTransform(Game.Actor.Interop.BrioCharacterBase* charaBase)
+    {
+        return new Transform
+        {
+            Position = charaBase->CharacterBase.DrawObject.Object.Position,
+            Rotation = charaBase->CharacterBase.DrawObject.Object.Rotation,
+            Scale = (Vector3)charaBase->CharacterBase.DrawObject.Object.Scale * charaBase->ScaleFactor
+        };
+    }
+
+    private static Vector3 SafeRcp(Vector3 v)
+    {
+        return new Vector3(
+            MathF.Abs(v.X) > 1e-6f ? 1f / v.X : 0f,
+            MathF.Abs(v.Y) > 1e-6f ? 1f / v.Y : 0f,
+            MathF.Abs(v.Z) > 1e-6f ? 1f / v.Z : 0f
+        );
     }
 
     public override void Dispose()

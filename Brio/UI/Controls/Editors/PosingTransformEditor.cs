@@ -80,6 +80,14 @@ public class PosingTransformEditor
 
                         ImGui.SameLine();
 
+                        PosingEditorCommon.DrawFollowSelect(posingCapability, new Vector2(25 * ImGuiHelpers.GlobalScale));
+
+                        ImGui.SameLine();
+
+                        PosingEditorCommon.DrawAnchorsButton(posingCapability, new Vector2(25 * ImGuiHelpers.GlobalScale));
+
+                        ImGui.SameLine();
+
                         using(ImRaii.Disabled(posingCapability.Selected.Value is None))
                         {
                             if(ImBrio.FontIconButton("clear_selection", FontAwesomeIcon.MinusSquare, "Clear Selection"))

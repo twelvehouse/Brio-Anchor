@@ -28,6 +28,8 @@ public class PoseInfo
     public bool HasAnyStacks => _poses.Any(p => p.Value.HasStacks);
     public bool HasIKStacks => _poses.Any(x => x.Value.Stacks.Any(s => s.IKInfo.Enabled));
 
+    public IEnumerable<BonePoseInfo> AllPoses => _poses.Values;
+
     public Dictionary<string, int> StackCounts
     {
         get
@@ -83,7 +85,29 @@ public class BonePoseInfo(BonePoseInfoId id, PoseInfo parent)
 
     public BoneIKInfo DefaultIK { get; set; } = BoneIKInfo.CalculateDefault(id.BoneName);
 
+    public BoneFollowInfo? Follow { get; set; } = null;
+
     public List<BonePoseTransformInfo> Stacks => _stacks;
+
+    // Transient stacks are added (typically by frame-driven sources like Follow) and
+    // removed at the end of each skeleton update so they don't accumulate in the persistent pose.
+    public int TransientStackCount { get; private set; } = 0;
+
+    public void AddTransientStack(BonePoseTransformInfo info)
+    {
+        _stacks.Add(info);
+        TransientStackCount++;
+    }
+
+    public void RemoveTransientStacks()
+    {
+        if(TransientStackCount <= 0)
+            return;
+
+        int removeCount = Math.Min(TransientStackCount, _stacks.Count);
+        _stacks.RemoveRange(_stacks.Count - removeCount, removeCount);
+        TransientStackCount = 0;
+    }
 
     public PoseMirrorMode MirrorMode { get; set; } = PoseMirrorMode.None;
 
@@ -162,7 +186,11 @@ public class BonePoseInfo(BonePoseInfoId id, PoseInfo parent)
             MirrorMode = MirrorMode
         };
 
-        clone._stacks.AddRange(_stacks);
+        // Exclude transient stacks (e.g. those produced by Follow) from clones —
+        // they are reproduced each frame and must not survive into undo history.
+        int persistentCount = _stacks.Count - TransientStackCount;
+        for(int i = 0; i < persistentCount; i++)
+            clone._stacks.Add(_stacks[i]);
 
         return clone;
     }

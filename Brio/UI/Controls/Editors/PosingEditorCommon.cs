@@ -267,6 +267,68 @@ public static class PosingEditorCommon
         }
     }
 
+    public static void DrawAnchorsButton(PosingCapability posing, Vector2 buttonSize)
+    {
+        // Belt-and-suspenders: clamp the popup so any future "labels feeding back into
+        // auto-resize" mistake can't make the popup grow off-screen.
+        ImGui.SetNextWindowSizeConstraints(new Vector2(320, 0), new Vector2(420, 600));
+
+        // Explicit braces are essential here — `using var` would extend the popup scope
+        // to the end of the function, dragging the button render call inside the popup.
+        using(var popup = ImRaii.Popup("transform_anchors_popup"))
+        {
+            if(popup.Success)
+            {
+                AnchorListEditor.Draw("anchors_editor", posing);
+            }
+        }
+
+        if(ImGui.Button("A", buttonSize))
+            ImGui.OpenPopup("transform_anchors_popup");
+
+        ImBrio.AttachToolTip("Manage anchors on this bone");
+    }
+
+    public static void DrawFollowSelect(PosingCapability posing, Vector2 buttonSize)
+    {
+        if(posing.Selected.Value is BonePoseInfoId boneId)
+        {
+            bool enabled = false;
+
+            var bone = posing.SkeletonPosing.GetBone(boneId);
+            bool isValid = bone != null && bone.Skeleton.IsValid;
+
+            if(isValid)
+            {
+                var bonePose = posing.SkeletonPosing.GetBonePose(boneId);
+                enabled = bonePose.Follow is { Enabled: true, HasValidAnchor: true } && BrioStyle.EnableStyle;
+
+                using var popup = ImRaii.Popup("transform_follow_popup");
+                {
+                    if(popup.Success)
+                    {
+                        BoneFollowEditor.Draw($"follow_editor_{boneId}", bonePose, posing);
+                    }
+                }
+            }
+
+            using(ImRaii.PushColor(ImGuiCol.Button, ThemeManager.CurrentTheme.Accent.AccentColor, enabled))
+            {
+                if(ImGui.Button("F", buttonSize))
+                    ImGui.OpenPopup("transform_follow_popup");
+
+                ImBrio.AttachToolTip("Follow an anchor");
+            }
+        }
+        else
+        {
+            ImGui.BeginDisabled();
+            ImGui.Button("F", buttonSize);
+            ImGui.EndDisabled();
+            ImBrio.AttachToolTip("Follow an anchor");
+        }
+    }
+
     public static void DrawIKSelect(PosingCapability posing, Vector2 buttonSize)
     {
         if(posing.Selected.Value is BonePoseInfoId boneId)

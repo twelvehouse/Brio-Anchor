@@ -191,6 +191,7 @@ public class Brio : IDalamudPlugin
         serviceCollection.AddSingleton<SkeletonService>();
         serviceCollection.AddSingleton<PosingService>();
         serviceCollection.AddSingleton<IKService>();
+        serviceCollection.AddSingleton<AnchorService>();
         serviceCollection.AddSingleton<CameraService>();
         serviceCollection.AddSingleton<ObjectMonitorService>();
         serviceCollection.AddSingleton<PhysicsService>();
