@@ -4,10 +4,13 @@ permissions:
   contents: write
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       version:
-        description: Version to create
+        description: Version to create (without v prefix)
         required: true
 
 jobs:
@@ -20,6 +23,17 @@ jobs:
       with:
         fetch-depth: 0
         submodules: true
+
+    - name: Set version
+      id: version
+      shell: pwsh
+      run: |
+        if ("${{ github.event_name }}" -eq "push") {
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+        } else {
+          $ver = "${{ github.event.inputs.version }}"
+        }
+        echo "version=$ver" >> $env:GITHUB_OUTPUT
 
     - name: Install .NET
       uses: actions/setup-dotnet@v5
@@ -35,7 +49,7 @@ jobs:
       run: dotnet restore Brio.slnx
 
     - name: Build Brio
-      run: dotnet build Brio.slnx --no-restore /p:Configuration=Release /p:Version=${{ github.event.inputs.version }}
+      run: dotnet build Brio.slnx --no-restore /p:Configuration=Release /p:Version=${{ steps.version.outputs.version }}
 
     - name: Zip Release
       uses: TheDoctor0/zip-release@0.6.0
@@ -43,31 +57,30 @@ jobs:
         filename: '../../../../Brio.zip'
         directory: './Brio/bin/x64/Release/'
         exclusions: 'Brio Brio/*'
-        
+
     - name: Upload Release
       uses: ncipollo/release-action@v1
       with:
         allowUpdates: true
         artifacts: "./Brio.zip"
-        name: Brio v${{ github.event.inputs.version }}
-        tag: v${{ github.event.inputs.version }}
+        name: Brio v${{ steps.version.outputs.version }}
+        tag: v${{ steps.version.outputs.version }}
         draft: false
         token: ${{ secrets.GITHUB_TOKEN }}
-        commit: ${{ vars.GITHUB_SHA }}     
 
     - name: Update repo.json
       run: |
         git config --global user.name "Actions User"
         git config --global user.email "actions@github.com"
         git fetch origin main && git checkout main
-        $ver = '${{ github.event.inputs.version }}'
+        $ver = '${{ steps.version.outputs.version }}'
         $path = './Resources/Templates/repo.tmpl'
         $new_path = './repo.json'
         $content = get-content -path $path
         $content = $content -replace '{version}',$ver
         set-content -Path $new_path -Value $content
         git add repo.json
-        git commit -m "[CI] Updating versions for v${{ github.event.inputs.version }}" || true
+        git commit -m "[CI] Updating versions for v${{ steps.version.outputs.version }}" || true
         git push origin main || true
 
     - name: Update DalamudPlugins repo
@@ -82,6 +95,6 @@ jobs:
         git add plugins/Brio/latest.zip
         git diff --cached --quiet
         if ($LASTEXITCODE -ne 0) {
-          git commit -m "chore: update Brio ${{ github.event.inputs.version }}"
+          git commit -m "chore: update Brio ${{ steps.version.outputs.version }}"
           git push
         }

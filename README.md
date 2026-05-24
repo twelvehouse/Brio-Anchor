@@ -3,6 +3,16 @@
 > Brio is a tool for FFXIV to enhance the GPosing experience. 
 Brio is currently in alpha, and as such, there may be bugs. If you find any, please report them!
 
+## Changes from upstream
+
+This is a personal fork of [Etheirys/Brio](https://github.com/Etheirys/Brio) with the following additions:
+
+### Anchor
+Allows you to attach an anchor to any bone and have other bones follow it in real-time.
+- Set an anchor on a source bone
+- Any number of target bones can subscribe to that anchor
+- Target bones update continuously to match the anchor's transform during GPose
+
 ## Features
 * Actor Posing
   * While animating
