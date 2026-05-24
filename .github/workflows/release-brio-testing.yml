@@ -74,3 +74,19 @@ jobs:
         git add repo.json
         git commit -m "[CI] Updating Testing version for v${{ github.event.inputs.version-testing }}" || true
         git push origin main || true
+
+    - name: Update DalamudPlugins repo
+      shell: pwsh
+      run: |
+        git clone https://x-access-token:${{ secrets.PLUGINS_REPO_TOKEN }}@github.com/twelvehouse/DalamudPlugins.git dalamud-plugins
+        New-Item -ItemType Directory -Force -Path dalamud-plugins/plugins/Brio | Out-Null
+        Copy-Item Brio.zip dalamud-plugins/plugins/Brio/latest.zip
+        Set-Location dalamud-plugins
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add plugins/Brio/latest.zip
+        git diff --cached --quiet
+        if ($LASTEXITCODE -ne 0) {
+          git commit -m "chore: update Brio ${{ github.event.inputs.version-testing }}"
+          git push
+        }
