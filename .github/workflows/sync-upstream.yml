@@ -1,0 +1,196 @@
+name: Sync Upstream
+
+# 本家 (Etheirys/Brio) の更新を検出して main へ取り込む。
+#
+# ポイント:
+#   - FORK_OWNED_PATHS で指定したパス（フォークが独自管理している場所）は、
+#     本家が変更していてもコンフリクトさせず常にフォーク側を維持する。
+#     例: .github/ … フォークは release 以外のワークフローを削除済みなので、
+#         本家の codeql.yml 変更などが来ても無視して先に進める。
+#
+# 流れ:
+#   1. 本家に新規コミットがあるか確認（無ければ何もしない）
+#   2. main に本家をマージ。FORK_OWNED_PATHS のコンフリクトは自動でフォーク側に解決
+#   3-a. 実コードに変化なし（.github 等だけ） → main を進めるだけ（リリースなし）
+#   3-b. 実コードに変化あり → ビルド検証
+#          成功 → main へ反映 → リリース（release-brio.yml を dispatch）
+#          失敗 → PR を作成して手動対応
+#   3-c. FORK_OWNED_PATHS 以外に本物のコンフリクト → PR を作成して手動対応
+
+on:
+  schedule:
+    # 毎週月曜 06:00 UTC（日本時間 月曜 15:00）
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write   # 自動リリース（release-brio.yml を workflow_dispatch）用
+
+env:
+  UPSTREAM_REPO: https://github.com/Etheirys/Brio.git
+  UPSTREAM_BRANCH: main
+  SYNC_BRANCH: sync/upstream
+  # フォークが独自管理していて本家の変更を取り込みたくないパス（コンフリクト時フォーク優先）
+  FORK_OWNED_PATHS: .github
+
+jobs:
+  sync:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Fetch upstream
+        shell: bash
+        run: |
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch upstream "$UPSTREAM_BRANCH"
+          git fetch --tags origin
+
+      - name: Check for new upstream commits
+        id: check
+        shell: bash
+        run: |
+          NEW=$(git rev-list --count "origin/main..upstream/$UPSTREAM_BRANCH")
+          echo "new_commits=$NEW" >> "$GITHUB_OUTPUT"
+          echo "本家の新規コミット: $NEW 件"
+
+      - name: Merge upstream (auto-resolve fork-owned paths)
+        if: steps.check.outputs.new_commits != '0'
+        id: prep
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config core.quotepath false
+
+          BASE=$(git rev-parse origin/main)
+          git checkout -B autosync "$BASE"
+
+          # マージ試行（コンフリクトしても止めない）
+          set +e
+          git merge --no-ff --no-commit "upstream/$UPSTREAM_BRANCH"
+          set -e
+
+          # フォーク管理パスのコンフリクトはフォーク側に寄せて解決
+          for f in $(git ls-files -u -- $FORK_OWNED_PATHS | awk '{print $4}' | sort -u); do
+            if git show ":2:$f" >/dev/null 2>&1; then
+              git checkout --ours -- "$f"   # 両側で変更 → フォーク版を採用
+              git add -- "$f"
+            else
+              git rm -q --ignore-unmatch -- "$f"   # フォークで削除済み → 削除のまま
+            fi
+          done
+
+          # まだコンフリクトが残る → 本物のコンフリクト。PR を立てて手動対応
+          if git ls-files -u | grep -q .; then
+            echo "state=conflict" >> "$GITHUB_OUTPUT"
+            git merge --abort 2>/dev/null || true
+            git push origin "upstream/$UPSTREAM_BRANCH:refs/heads/$SYNC_BRANCH" --force
+            COMMITS=$(git log --pretty=format:'- %h %s' "$BASE..upstream/$UPSTREAM_BRANCH")
+            TITLE="Sync upstream: conflicts need manual resolution"
+            BODY=$(cat <<EOF
+          本家 [Etheirys/Brio](https://github.com/Etheirys/Brio) の取り込みで **コンフリクト** が発生しました（\`$FORK_OWNED_PATHS\` 以外）。
+
+          手動で解決してください（例: \`gh pr checkout $SYNC_BRANCH\` → マージ解決）。
+
+          ### 取り込み対象のコミット
+          $COMMITS
+          EOF
+          )
+            EXISTING=$(gh pr list --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number')
+            if [ -n "$EXISTING" ]; then
+              gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"
+            else
+              gh pr create --base main --head "$SYNC_BRANCH" --title "$TITLE" --body "$BODY"
+            fi
+            echo "本物のコンフリクトあり。PR を作成/更新しました。"
+            exit 0
+          fi
+
+          # マージ完了（コンフリクト無し or フォーク管理パスのみ解決）
+          git commit --no-edit >/dev/null 2>&1 || true
+
+          # 実コードに変化があるか（.github 等をフォーク側に寄せた結果、差分ゼロなら）
+          if git diff --quiet "$BASE" HEAD; then
+            echo "state=infra" >> "$GITHUB_OUTPUT"
+            git push origin HEAD:main
+            echo "本家の変更はフォーク管理パスのみ。main を進めるだけ（リリースなし）。"
+            exit 0
+          fi
+
+          echo "state=build" >> "$GITHUB_OUTPUT"
+          echo "実コードに変化あり。ビルド検証に進みます。"
+
+      # ---- state=build のときだけビルド（マージ済みの作業ツリーを検証） ----
+
+      - name: Update submodules for merged state
+        if: steps.prep.outputs.state == 'build'
+        shell: bash
+        run: git submodule update --init --recursive
+
+      - name: Install .NET
+        if: steps.prep.outputs.state == 'build'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download Dalamud
+        if: steps.prep.outputs.state == 'build'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/stg/latest.zip -OutFile latest.zip
+          Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+
+      - name: Restore Dependencies
+        if: steps.prep.outputs.state == 'build'
+        run: dotnet restore Brio.slnx
+
+      - name: Build (verify)
+        if: steps.prep.outputs.state == 'build'
+        run: dotnet build Brio.slnx --no-restore /p:Configuration=Release
+
+      - name: Push to main and trigger release
+        if: steps.prep.outputs.state == 'build' && success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # ビルド成功 → マージ結果を main へ反映
+          git push origin HEAD:main
+
+          # 最新タグ (vX.Y.Z...) の末尾セグメントを +1 して新バージョンを決定
+          LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          LATEST=${LATEST#v}
+          if [ -z "$LATEST" ]; then LATEST="0.0.0"; fi
+          IFS='.' read -ra P <<< "$LATEST"
+          IDX=$(( ${#P[@]} - 1 ))
+          P[$IDX]=$(( ${P[$IDX]} + 1 ))
+          NEW=$(IFS='.'; echo "${P[*]}")
+          echo "新バージョン: v$NEW"
+
+          # workflow_dispatch は GITHUB_TOKEN でも起動する（push/pull_request と違い例外）
+          gh workflow run release-brio.yml --ref main -f version="$NEW"
+          echo "release-brio.yml を version=$NEW で起動しました。"
+
+      - name: Open PR on build failure
+        if: steps.prep.outputs.state == 'build' && failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push origin HEAD:refs/heads/$SYNC_BRANCH --force
+          BODY="⚠️ 本家の取り込み自体はできましたが、**ビルドに失敗** しました。手動で確認してください。ログ: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          EXISTING=$(gh pr list --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh pr edit "$EXISTING" --title "Sync upstream: build failed" --body "$BODY"
+          else
+            gh pr create --base main --head "$SYNC_BRANCH" --title "Sync upstream: build failed" --body "$BODY"
+          fi
