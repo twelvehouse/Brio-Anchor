@@ -77,7 +77,9 @@ jobs:
         $path = './Resources/Templates/repo.tmpl'
         $new_path = './repo.json'
         $content = get-content -path $path
-        $content = $content -replace '{version}',$ver
+        # Upstream's repo.tmpl uses {version_live}/{version_testing}; this fork
+        # ships a single build so map both (and the old {version}) to $ver.
+        $content = $content -replace '{version_live}',$ver -replace '{version_testing}',$ver -replace '{version}',$ver
         set-content -Path $new_path -Value $content
         git add repo.json
         git commit -m "[CI] Updating versions for v${{ steps.version.outputs.version }}" || true

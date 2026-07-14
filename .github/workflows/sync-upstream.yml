@@ -114,13 +114,15 @@ jobs:
           $COMMITS
           EOF
           )
-            EXISTING=$(gh pr list --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number')
+            # PR is only a notification; the branch is already pushed above, so
+            # never let a PR-permission hiccup fail the whole sync job.
+            EXISTING=$(gh pr list --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number' 2>/dev/null || true)
             if [ -n "$EXISTING" ]; then
-              gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"
+              gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY" || echo "::warning::Could not update PR #$EXISTING; branch $SYNC_BRANCH is pushed for manual handling."
             else
-              gh pr create --base main --head "$SYNC_BRANCH" --title "$TITLE" --body "$BODY"
+              gh pr create --base main --head "$SYNC_BRANCH" --title "$TITLE" --body "$BODY" || echo "::warning::Could not create PR; branch $SYNC_BRANCH is pushed for manual handling."
             fi
-            echo "Genuine conflict. PR created/updated."
+            echo "Genuine conflict. Branch $SYNC_BRANCH pushed (PR opened if permitted)."
             exit 0
           fi
 
@@ -196,10 +198,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git push origin HEAD:refs/heads/$SYNC_BRANCH --force
+          # This repo is a fork, so GITHUB_TOKEN is not granted pull-requests
+          # write; the PR is best-effort and must not mask the build failure.
           BODY="Merging upstream succeeded, but the **build failed**. Please investigate. Log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          EXISTING=$(gh pr list --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number')
+          EXISTING=$(gh pr list --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number' 2>/dev/null || true)
           if [ -n "$EXISTING" ]; then
-            gh pr edit "$EXISTING" --title "Sync upstream: build failed" --body "$BODY"
+            gh pr edit "$EXISTING" --title "Sync upstream: build failed" --body "$BODY" || echo "::warning::Could not update PR; see branch $SYNC_BRANCH."
           else
-            gh pr create --base main --head "$SYNC_BRANCH" --title "Sync upstream: build failed" --body "$BODY"
+            gh pr create --base main --head "$SYNC_BRANCH" --title "Sync upstream: build failed" --body "$BODY" || echo "::warning::Could not create PR; see branch $SYNC_BRANCH."
           fi
