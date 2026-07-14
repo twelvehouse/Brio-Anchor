@@ -8,12 +8,12 @@ using Brio.Input;
 using Brio.Library;
 using Brio.Library.Filters;
 using Brio.Library.Tags;
-using Brio.UI.Controls.Core;
 using Brio.UI.Controls.Editors;
 using Brio.UI.Controls.Stateless;
 using Brio.UI.Theming;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
@@ -25,7 +25,7 @@ using System.Numerics;
 
 namespace Brio.UI.Windows;
 
-public class LibraryWindow : Window
+public class LibraryWindow : Window, IDisposable
 {
     private static float WindowContentWidth => ImGui.GetWindowContentRegionMax().X - ImGui.GetWindowContentRegionMin().X;
     private static float WindowContentHeight => ImGui.GetWindowContentRegionMax().Y - ImGui.GetWindowContentRegionMin().Y;
@@ -38,7 +38,7 @@ public class LibraryWindow : Window
     private const float PathBarButtonWidth = 25;
     private const float FooterScaleSliderWidth = 100;
     private const int MinEntrySize = 80;
-    private const int MaxEntrySize = 250;
+    private const int MaxEntrySize = 450;
 
     private readonly SettingsWindow _settingsWindow;
 
@@ -111,6 +111,8 @@ public class LibraryWindow : Window
             MaximumSize = ImGui.GetIO().DisplaySize
         };
         this.SizeConstraints = constraints;
+
+        this.AllowBackgroundBlur = false;
 
         _configurationService = configurationService;
         _libraryManager = libraryManager;
@@ -275,6 +277,7 @@ public class LibraryWindow : Window
 
     private void OnLibraryScanFinished()
     {
+        ResolvePath();
         TryRefresh(true);
     }
 
@@ -296,6 +299,8 @@ public class LibraryWindow : Window
 
     public override void Draw()
     {
+        ImBrio.BlurWindow();
+
         DrawLibrary();
     }
 
@@ -306,7 +311,7 @@ public class LibraryWindow : Window
 
         ImGui.OpenPopup($"Import {_modalFilter.Name}##brio_library_popup");
 
-        ImGui.SetNextWindowSizeConstraints(MinimumSize, ImGui.GetIO().DisplaySize);
+        ImGui.SetNextWindowSizeConstraints(MinimumSize * ImGuiHelpers.GlobalScale, ImGui.GetIO().DisplaySize);
 
         using(var popup = ImRaii.PopupModal($"Import {_modalFilter.Name}##brio_library_popup"))
         {
@@ -435,7 +440,7 @@ public class LibraryWindow : Window
                             var config = ConfigurationService.Instance.Configuration;
                             bool isFavorite = config.Library.Favorites.Contains(ieb.Identifier);
 
-                            using(ImRaii.PushColor(ImGuiCol.Text, isFavorite ? ThemeManager.CurrentTheme.Accent.AccentColor : UIConstants.ToggleButtonInactive))
+                            using(ImRaii.PushColor(ImGuiCol.Text, isFavorite ? ThemeManager.CurrentTheme.Accent.AccentColor : ThemeManager.CurrentTheme.Text.Text))
                             {
                                 if(ImBrio.FontIconButton(FontAwesomeIcon.Heart))
                                 {
@@ -1056,7 +1061,7 @@ public class LibraryWindow : Window
 
     private void DrawFooter()
     {
-        if(ImBrio.Button("Add new source", FontAwesomeIcon.None, new Vector2(100, 0)))
+        if(ImBrio.Button("Add new source", FontAwesomeIcon.Plus, new Vector2(0, 0), centerTest: true))
         {
             if(_isModal)
             {
@@ -1149,11 +1154,48 @@ public class LibraryWindow : Window
         sw.Start();
 
         await _libraryManager.ScanAsync();
+        ResolvePath();
         TryRefresh(true);
 
         sw.Stop();
         _lastRefreshTimeMs = sw.ElapsedMilliseconds;
         _isRescanning = false;
+    }
+
+    private void ResolvePath()
+    {
+        if(_path.Count <= 1)
+            return;
+
+        List<GroupEntryBase> resolved = [_libraryManager.Root];
+        GroupEntryBase current = _libraryManager.Root;
+
+        for(int i = 1; i < _path.Count; i++)
+        {
+            string identifier = _path[i].Identifier;
+            GroupEntryBase? match = null;
+
+            if(current.AllEntries != null)
+            {
+                foreach(EntryBase entry in current.AllEntries)
+                {
+                    if(entry is GroupEntryBase group && group.Identifier == identifier)
+                    {
+                        match = group;
+                        break;
+                    }
+                }
+            }
+
+            if(match == null)
+                break;
+
+            resolved.Add(match);
+            current = match;
+        }
+
+        _path.Clear();
+        _path.AddRange(resolved);
     }
 
     public void TryRefresh(bool filter)
@@ -1239,5 +1281,12 @@ public class LibraryWindow : Window
         sw.Stop();
         _lastRefreshTimeMs = sw.ElapsedMilliseconds;
         _isRefreshing = false;
+    }
+
+    public void Dispose()
+    {
+        _libraryManager.OnScanFinished -= OnLibraryScanFinished;
+        _configurationService.OnConfigurationChanged -= OnConfigurationChanged;
+        _gPoseService.OnGPoseStateChange -= OnGPoseStateChange;
     }
 }

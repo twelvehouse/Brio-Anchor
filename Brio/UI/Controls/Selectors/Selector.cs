@@ -1,4 +1,6 @@
-﻿using Dalamud.Bindings.ImGui;
+﻿using Brio.UI.Controls.Stateless;
+using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using System;
 using System.Collections.Generic;
@@ -70,8 +72,11 @@ public abstract class Selector<T> where T : class
         _lastSearch = string.Empty;
     }
 
-    public void Draw()
+    public unsafe void Draw()
     {
+
+        ImBrio.BlurPopup();
+
         var items = _filteredAndSortedItems;
 
         SoftSelectionChanged = false;
@@ -106,11 +111,12 @@ public abstract class Selector<T> where T : class
                 }
             }
 
-            var listSize = MinimumListSize;
+            var minSize = MinimumListSize * ImGuiHelpers.GlobalScale;
+            var listSize = minSize;
 
             if(_useAvailableSpace)
             {
-                // Use all available space in the current context (e.g. pinned window) I hate this, kill it 
+                // Use all available space in the current context (e.g. pinned window) I hate this, kill it
                 var availableSize = ImGui.GetContentRegionAvail();
                 listSize.X = availableSize.X;
                 listSize.Y = availableSize.Y;
@@ -122,7 +128,7 @@ public abstract class Selector<T> where T : class
                 if(listSize.X < maxSize.X)
                 {
                     listSize.X = maxSize.X;
-                    listSize.Y = MinimumListSize.Y * (1.0f + (listSize.X / MinimumListSize.X));
+                    listSize.Y = minSize.Y * (1.0f + (listSize.X / minSize.X));
                 }
             }
 
@@ -136,60 +142,64 @@ public abstract class Selector<T> where T : class
                     _selectableSize.X = 0;
                     _selectableSize.Y = EntrySize;
 
-                    int itemCount = items.Count;
-                    for(int i = 0; i < itemCount; i++)
+                    float rowPitch = EntrySize + ImGui.GetStyle().ItemSpacing.Y;
+
+                    if(_scrollToSelected)
                     {
-                        var item = items[i];
+                        int selIndex = items.FindIndex(IsItemSoftSelected);
+                        if(selIndex >= 0)
+                            ImGui.SetScrollY(Math.Max(0f, selIndex * rowPitch - (listSize.Y - rowPitch) * 0.5f));
 
-                        using(ImRaii.PushId(i))
+                        _scrollToSelected = false;
+                    }
+
+                    var clipper = new ImGuiListClipperPtr(ImGuiNative.ImGuiListClipper());
+                    clipper.Begin(items.Count, rowPitch);
+                    while(clipper.Step())
+                    {
+                        for(int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
                         {
-                            var startPos = ImGui.GetCursorPos();
-                            bool isSoftSelected = IsItemSoftSelected(item);
-                            bool wasSoftSelected = ImGui.Selectable($"###entry", isSoftSelected, ImGuiSelectableFlags.AllowDoubleClick, _selectableSize);
-                            bool wasSelected = wasSoftSelected && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left);
-                            var endPos = ImGui.GetCursorPos();
+                            var item = items[i];
 
-                            // Only draw visible items
-                            if(ImGui.IsItemVisible())
+                            using(ImRaii.PushId(i))
                             {
-                                ImGui.SetCursorPos(startPos);
-                                using(ImRaii.PushId("item_container"))
-                                {
-                                    using(var itemGroup = ImRaii.Group())
-                                    {
-                                        DrawItem(item, isSoftSelected);
-                                    }
-                                    if(ImGui.IsItemHovered())
-                                        DrawTooltip(item);
-                                }
-                                ImGui.SetCursorPos(endPos);
-                            }
+                                var startPos = ImGui.GetCursorPos();
+                                bool isSoftSelected = IsItemSoftSelected(item);
+                                bool wasSoftSelected = ImGui.Selectable($"###entry", isSoftSelected, ImGuiSelectableFlags.AllowDoubleClick, _selectableSize);
+                                bool wasSelected = wasSoftSelected && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left);
+                                var endPos = ImGui.GetCursorPos();
 
-                            if(isSoftSelected && _scrollToSelected)
-                            {
                                 if(ImGui.IsItemVisible())
                                 {
-                                    _scrollToSelected = false;
+                                    ImGui.SetCursorPos(startPos);
+                                    using(ImRaii.PushId("item_container"))
+                                    {
+                                        using(var itemGroup = ImRaii.Group())
+                                        {
+                                            DrawItem(item, isSoftSelected);
+                                        }
+                                        if(ImGui.IsItemHovered())
+                                            DrawTooltip(item);
+                                    }
+                                    ImGui.SetCursorPos(endPos);
                                 }
-                                else
-                                {
-                                    ImGui.SetScrollHereY();
-                                }
-                            }
 
-                            if(wasSoftSelected)
-                            {
-                                _softSelected = item;
-                                SoftSelectionChanged = true;
-
-                                if(wasSelected)
+                                if(wasSoftSelected)
                                 {
-                                    _selected = item;
-                                    SelectionChanged = true;
+                                    _softSelected = item;
+                                    SoftSelectionChanged = true;
+
+                                    if(wasSelected)
+                                    {
+                                        _selected = item;
+                                        SelectionChanged = true;
+                                    }
                                 }
                             }
                         }
                     }
+                    clipper.End();
+                    clipper.Destroy();
                 }
             }
         }
