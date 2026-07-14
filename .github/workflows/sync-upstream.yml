@@ -91,17 +91,24 @@ jobs:
             fi
           done
 
-          # Still unmerged -> genuine conflict. Open a PR for manual handling.
+          # Still unmerged -> genuine conflict outside fork-owned paths.
+          # Commit the merge with conflict markers as-is and push that (NOT raw
+          # upstream). Fork-owned paths are already resolved above, so upstream's
+          # .github/workflows files are dropped from the tree -- otherwise the
+          # GitHub App GITHUB_TOKEN cannot push a branch that adds workflow files.
           if git ls-files -u | grep -q .; then
             echo "state=conflict" >> "$GITHUB_OUTPUT"
-            git merge --abort 2>/dev/null || true
-            git push origin "upstream/$UPSTREAM_BRANCH:refs/heads/$SYNC_BRANCH" --force
+            git add -A
+            git commit --no-edit >/dev/null 2>&1 \
+              || git commit -m "Merge upstream/$UPSTREAM_BRANCH (conflicts to resolve)" >/dev/null
+            git push origin "HEAD:refs/heads/$SYNC_BRANCH" --force
             COMMITS=$(git log --pretty=format:'- %h %s' "$BASE..upstream/$UPSTREAM_BRANCH")
             TITLE="Sync upstream: conflicts need manual resolution"
             BODY=$(cat <<EOF
           Merging [Etheirys/Brio](https://github.com/Etheirys/Brio) produced **conflicts** (outside \`$FORK_OWNED_PATHS\`).
 
-          Please resolve them manually (e.g. \`gh pr checkout $SYNC_BRANCH\` then resolve).
+          This branch has the merge committed **with conflict markers**. Resolve them manually:
+          \`gh pr checkout $SYNC_BRANCH\`, fix the \`<<<<<<<\` / \`=======\` / \`>>>>>>>\` markers, commit, then merge this PR.
 
           ### Commits to be merged
           $COMMITS
