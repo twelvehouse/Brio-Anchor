@@ -180,18 +180,22 @@ jobs:
           # Build succeeded -> publish the merge result to main.
           git push origin HEAD:main
 
-          # Bump the last segment of the latest tag (vX.Y.Z...) for the new version.
-          LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1)
-          LATEST=${LATEST#v}
-          if [ -z "$LATEST" ]; then LATEST="0.0.0"; fi
-          IFS='.' read -ra P <<< "$LATEST"
+          # Bump the last segment of repo.json's AssemblyVersion for the new
+          # version. repo.json is the source of truth release-brio.yml maintains;
+          # git tags are unreliable here (the fork carries only a stale v0.7.3.0,
+          # so tag-based detection produced a downgrade).
+          CUR=$(grep -oE '"AssemblyVersion"[[:space:]]*:[[:space:]]*"[0-9.]+"' repo.json | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+          if [ -z "$CUR" ]; then CUR="0.0.0.0"; fi
+          IFS='.' read -ra P <<< "$CUR"
           IDX=$(( ${#P[@]} - 1 ))
           P[$IDX]=$(( ${P[$IDX]} + 1 ))
           NEW=$(IFS='.'; echo "${P[*]}")
-          echo "New version: v$NEW"
+          echo "Current version (repo.json): $CUR -> new: v$NEW"
 
           # workflow_dispatch is triggered even by GITHUB_TOKEN (unlike push/pull_request).
-          gh workflow run release-brio.yml --ref main -f version="$NEW"
+          # -R is required: this job adds an 'upstream' remote, so gh's default repo
+          # resolution would otherwise target Etheirys/Brio and 403.
+          gh workflow run release-brio.yml -R "$GITHUB_REPOSITORY" --ref main -f version="$NEW"
           echo "Dispatched release-brio.yml with version=$NEW."
 
       - name: Open PR on build failure
