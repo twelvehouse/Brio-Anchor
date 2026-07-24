@@ -34,8 +34,11 @@ env:
   UPSTREAM_REPO: https://github.com/Etheirys/Brio.git
   UPSTREAM_BRANCH: main
   SYNC_BRANCH: sync/upstream
-  # Paths this fork manages on its own; keep the fork's version on conflict.
-  FORK_OWNED_PATHS: .github
+  # Paths this fork manages on its own; the fork's version is always kept and
+  # upstream changes there are ignored (space-separated). Resources/Templates
+  # holds repo.tmpl, which release-brio.yml needs -- upstream deleted it, so it
+  # must be pinned or the merge would drop it again.
+  FORK_OWNED_PATHS: .github Resources/Templates
 
 jobs:
   sync:
