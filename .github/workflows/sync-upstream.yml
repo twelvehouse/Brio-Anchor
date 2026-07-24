@@ -81,15 +81,18 @@ jobs:
           git merge --no-ff --no-commit "upstream/$UPSTREAM_BRANCH"
           set -e
 
-          # Resolve conflicts under fork-owned paths in the fork's favor.
-          for f in $(git ls-files -u -- $FORK_OWNED_PATHS | awk '{print $4}' | sort -u); do
-            if git show ":2:$f" >/dev/null 2>&1; then
-              git checkout --ours -- "$f"   # changed on both sides -> keep fork's
-              git add -- "$f"
-            else
-              git rm -q --ignore-unmatch -- "$f"   # deleted in fork -> keep deleted
-            fi
-          done
+          # Force fork-owned paths back to the fork's exact state, discarding ALL
+          # upstream changes there. Unlike a per-conflict loop, this also drops
+          # upstream files that merged cleanly (new workflows git never flags as a
+          # conflict) and undoes git's rename detection (e.g. our release-brio.yml
+          # mistaken for upstream's release.yml). The net effect on
+          # $FORK_OWNED_PATHS becomes exactly zero, so the GitHub App GITHUB_TOKEN
+          # -- which may not create/update .github/workflows files -- can push the
+          # result. GITHUB_TOKEN cannot be granted a `workflows` scope, so avoiding
+          # any workflow-file change is the only token-free way to push to main.
+          git rm -rf -q --ignore-unmatch -- $FORK_OWNED_PATHS
+          git checkout "$BASE" -- $FORK_OWNED_PATHS
+          git add -A -- $FORK_OWNED_PATHS
 
           # Still unmerged -> genuine conflict outside fork-owned paths.
           # Commit the merge with conflict markers as-is and push that (NOT raw
